@@ -15,7 +15,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/modelcontextprotocol/go-sdk/jsonschema"
 	"github.com/spf13/cobra"
 )
 
@@ -53,7 +52,7 @@ var stdioCmd = &cobra.Command{
 
 		cmdParts := strings.Fields(command)
 		transport := &mcp.CommandTransport{Command: exec.Command(cmdParts[0], cmdParts[1:]...)}
-		session, err := client.Connect(ctx, transport)
+		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			log.Fatalf("Failed to connect to stdio server: %v", err)
 		}
@@ -81,7 +80,7 @@ var sseCmd = &cobra.Command{
 		client := mcp.NewClient(&mcp.Implementation{Name: "mcp-cli", Version: "v0.1.0"}, nil)
 
 		transport := &mcp.SSEClientTransport{Endpoint: url}
-		session, err := client.Connect(ctx, transport)
+		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			log.Fatalf("Failed to connect to SSE server: %v", err)
 		}
@@ -109,7 +108,7 @@ var httpCmd = &cobra.Command{
 		client := mcp.NewClient(&mcp.Implementation{Name: "mcp-cli", Version: "v0.1.0"}, nil)
 
 		transport := &mcp.StreamableClientTransport{Endpoint: url}
-		session, err := client.Connect(ctx, transport)
+		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			log.Fatalf("Failed to connect to streamable HTTP server: %v", err)
 		}
@@ -147,7 +146,18 @@ type model struct {
 }
 
 func initialModel(ctx context.Context, session *mcp.ClientSession) model {
-	tools, err := session.Tools(ctx, nil).GetAll()
+	var tools []*mcp.Tool
+	var err error
+
+	// Iterate over the tools using range
+	for tool, iterErr := range session.Tools(ctx, nil) {
+		if iterErr != nil {
+			err = iterErr
+			break
+		}
+		tools = append(tools, tool)
+	}
+
 	if err != nil {
 		return model{err: err}
 	}
@@ -183,6 +193,17 @@ func (m model) Init() tea.Cmd {
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case toolResult:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		if verbose {
+			log.Println("State change: argumentInputView -> resultView")
+		}
+		m.state = resultView
+		m.result = msg.result
+		return m, nil
 	case tea.KeyMsg:
 		if verbose {
 			log.Printf("Key pressed: %s", msg.String())
@@ -244,7 +265,7 @@ func (m model) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if verbose {
 					log.Println("No arguments needed, calling tool directly")
 				}
-				return m, m.callTool
+				return m.callTool()
 			}
 		}
 	}
@@ -263,7 +284,7 @@ func (m model) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if verbose {
 				log.Println("Last argument input, calling tool")
 			}
-			return m, m.callTool
+			return m.callTool()
 		}
 		m.argFocus++
 		for i := range m.argInputs {
@@ -305,7 +326,6 @@ func (m model) updateResultView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-
 func (m model) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error: %v\n\nPress ctrl+c to quit.", m.err)
@@ -332,61 +352,67 @@ func (m model) View() string {
 	return ""
 }
 
-func (m model) callTool() (tea.Model, tea.Cmd) {
-	args := make(map[string]any)
-	for i, name := range m.argOrder {
-		args[name] = m.argInputs[i].Value()
-	}
-
-	if verbose {
-		log.Printf("Calling tool '%s' with args: %v", m.selectedTool.Name, args)
-	}
-
-	params := &mcp.CallToolParams{
-		Name:      m.selectedTool.Name,
-		Arguments: args,
-	}
-	result, err := m.session.CallTool(m.ctx, params)
-	if err != nil {
-		m.err = err
-		return m, nil
-	}
-
-	var resultStr strings.Builder
-	if result.IsError {
-		resultStr.WriteString("Error:\n")
-	}
-
-	for _, content := range result.Content {
-		switch c := content.(type) {
-		case *mcp.TextContent:
-			var obj any
-			if json.Unmarshal([]byte(c.Text), &obj) == nil {
-				prettyJSON, err := json.MarshalIndent(obj, "", "  ")
-				if err == nil {
-					resultStr.WriteString(string(prettyJSON))
-					continue
-				}
-			}
-			resultStr.WriteString(c.Text)
-		default:
-			prettyJSON, err := json.MarshalIndent(c, "", "  ")
-			if err != nil {
-				resultStr.WriteString(fmt.Sprintf("Unsupported content type: %T", c))
-			} else {
-				resultStr.WriteString(string(prettyJSON))
-			}
-		}
-	}
-
-	if verbose {
-		log.Println("State change: argumentInputView -> resultView")
-	}
-	m.state = resultView
-	m.result = resultStr.String()
-	return m, nil
+// toolResult represents the result of a tool call
+type toolResult struct {
+	result string
+	err    error
 }
 
+// callToolCmd returns a tea.Cmd that calls the tool
+func (m model) callToolCmd() tea.Cmd {
+	return func() tea.Msg {
+		args := make(map[string]any)
+		for i, name := range m.argOrder {
+			args[name] = m.argInputs[i].Value()
+		}
+
+		if verbose {
+			log.Printf("Calling tool '%s' with args: %v", m.selectedTool.Name, args)
+		}
+
+		params := &mcp.CallToolParams{
+			Name:      m.selectedTool.Name,
+			Arguments: args,
+		}
+		result, err := m.session.CallTool(m.ctx, params)
+		if err != nil {
+			return toolResult{err: err}
+		}
+
+		var resultStr strings.Builder
+		if result.IsError {
+			resultStr.WriteString("Error:\n")
+		}
+
+		for _, content := range result.Content {
+			switch c := content.(type) {
+			case *mcp.TextContent:
+				var obj any
+				if json.Unmarshal([]byte(c.Text), &obj) == nil {
+					prettyJSON, err := json.MarshalIndent(obj, "", "  ")
+					if err == nil {
+						resultStr.WriteString(string(prettyJSON))
+						continue
+					}
+				}
+				resultStr.WriteString(c.Text)
+			default:
+				prettyJSON, err := json.MarshalIndent(c, "", "  ")
+				if err != nil {
+					resultStr.WriteString(fmt.Sprintf("Unsupported content type: %T", c))
+				} else {
+					resultStr.WriteString(string(prettyJSON))
+				}
+			}
+		}
+
+		return toolResult{result: resultStr.String()}
+	}
+}
+
+func (m model) callTool() (tea.Model, tea.Cmd) {
+	return m, m.callToolCmd()
+}
 
 func handleSession(ctx context.Context, session *mcp.ClientSession) {
 	if verbose {
