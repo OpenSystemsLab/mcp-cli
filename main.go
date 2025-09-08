@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -129,22 +130,25 @@ type viewState int
 const (
 	toolSelectionView viewState = iota
 	argumentInputView
+	resultView
 )
 
 type AppModel struct {
-	state        viewState
-	ctx          context.Context
-	session      *mcp.ClientSession
-	toolList     list.Model
-	argInputs    []textinput.Model
-	argOrder     []string
-	argFocus     int
-	selectedTool *mcp.Tool
-	tools        []*mcp.Tool
-	err          error
-	log          []string
-	width        int
-	height       int
+	state         viewState
+	ctx           context.Context
+	session       *mcp.ClientSession
+	toolList      list.Model
+	argInputs     []textinput.Model
+	argOrder      []string
+	argFocus      int
+	selectedTool  *mcp.Tool
+	tools         []*mcp.Tool
+	result        string
+	err           error
+	log           []string
+	width         int
+	height        int
+	debugViewport viewport.Model
 }
 
 func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
@@ -172,12 +176,16 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Select a tool to execute"
 
+	vp := viewport.New(1, 1) // Initial size, will be updated on WindowSizeMsg
+	vp.SetContent("Debug log will appear here...")
+
 	return &AppModel{
-		state:    toolSelectionView,
-		ctx:      ctx,
-		session:  session,
-		toolList: l,
-		tools:    tools,
+		state:         toolSelectionView,
+		ctx:           ctx,
+		session:       session,
+		toolList:      l,
+		tools:         tools,
+		debugViewport: vp,
 	}
 }
 
@@ -192,6 +200,8 @@ func (i item) FilterValue() string { return i.title }
 
 func (m *AppModel) logf(format string, a ...any) {
 	m.log = append(m.log, fmt.Sprintf(format, a...))
+	m.debugViewport.SetContent(strings.Join(m.log, "\n"))
+	m.debugViewport.GotoBottom()
 }
 
 func (m AppModel) Init() tea.Cmd {
@@ -199,6 +209,9 @@ func (m AppModel) Init() tea.Cmd {
 }
 
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	var cmds []tea.Cmd
+
 	switch msg := msg.(type) {
 	case toolResult:
 		if msg.err != nil {
@@ -209,7 +222,8 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logf("Tool result received")
 		}
 		m.logf("Result:\n%s", msg.result)
-		return m, nil
+		m.result = msg.result
+		m.state = resultView
 	case tea.KeyMsg:
 		if verbose {
 			m.logf("Key pressed: %s", msg.String())
@@ -224,18 +238,40 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.state {
 		case toolSelectionView:
-			return m.updateToolSelectionView(msg)
+			var model tea.Model
+			model, cmd = m.updateToolSelectionView(msg)
+			cmds = append(cmds, cmd)
+			m.debugViewport, cmd = m.debugViewport.Update(msg)
+			cmds = append(cmds, cmd)
+			return model, tea.Batch(cmds...)
 		case argumentInputView:
-			return m.updateArgumentInputView(msg)
+			var model tea.Model
+			model, cmd = m.updateArgumentInputView(msg)
+			cmds = append(cmds, cmd)
+			m.debugViewport, cmd = m.debugViewport.Update(msg)
+			cmds = append(cmds, cmd)
+			return model, tea.Batch(cmds...)
+		case resultView:
+			var model tea.Model
+			model, cmd = m.updateResultView(msg)
+			cmds = append(cmds, cmd)
+			m.debugViewport, cmd = m.debugViewport.Update(msg)
+			cmds = append(cmds, cmd)
+			return model, tea.Batch(cmds...)
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Just save the dimensions, the actual sizing of components will be done in the View() function.
+		debugWidth := m.width / 3
+		m.debugViewport.Width = debugWidth
+		m.debugViewport.Height = m.height - 2
 	}
 
-	return m, nil
+	m.debugViewport, cmd = m.debugViewport.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -279,6 +315,18 @@ func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, cmd
+}
+
+func (m *AppModel) updateResultView(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if keyMsg.Type == tea.KeyEnter {
+			if verbose {
+				m.logf("State change: resultView -> argumentInputView")
+			}
+			m.state = argumentInputView
+		}
+	}
+	return m, nil
 }
 
 func (m *AppModel) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -346,9 +394,9 @@ func (m AppModel) View() string {
 		}
 		b.WriteString("\nPress Enter to submit, Tab to switch fields, Esc to go back to tool selection.")
 		mainContent.WriteString(b.String())
+	case resultView:
+		mainContent.WriteString(fmt.Sprintf("Tool Result:\n\n%s\n\nPress Enter to return to the argument input.", m.result))
 	}
-
-	debugContent := strings.Join(m.log, "\n")
 
 	mainPanel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -358,9 +406,9 @@ func (m AppModel) View() string {
 
 	debugPanel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		Width(debugWidth).
-		Height(m.height - 2).
-		Render(debugContent)
+		Width(m.debugViewport.Width).
+		Height(m.debugViewport.Height).
+		Render(m.debugViewport.View())
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, debugPanel)
 }
@@ -432,6 +480,14 @@ func (m *AppModel) callTool() (tea.Model, tea.Cmd) {
 }
 
 func handleSession(ctx context.Context, session *mcp.ClientSession) {
+	if verbose {
+		f, err := tea.LogToFile("debug.log", "debug")
+		if err != nil {
+			fmt.Println("fatal:", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+	}
 	p := tea.NewProgram(initialModel(ctx, session), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Error running program: %v", err)
