@@ -129,7 +129,6 @@ type viewState int
 const (
 	toolSelectionView viewState = iota
 	argumentInputView
-	resultView
 )
 
 type AppModel struct {
@@ -142,11 +141,13 @@ type AppModel struct {
 	argFocus     int
 	selectedTool *mcp.Tool
 	tools        []*mcp.Tool
-	result       string
 	err          error
+	log          []string
+	width        int
+	height       int
 }
 
-func initialModel(ctx context.Context, session *mcp.ClientSession) AppModel {
+func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 	var err error
 	var tools []*mcp.Tool
 
@@ -160,7 +161,7 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) AppModel {
 	}
 
 	if err != nil {
-		return AppModel{err: err}
+		return &AppModel{err: err}
 	}
 
 	items := []list.Item{}
@@ -171,7 +172,7 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) AppModel {
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Select a tool to execute"
 
-	return AppModel{
+	return &AppModel{
 		state:    toolSelectionView,
 		ctx:      ctx,
 		session:  session,
@@ -189,11 +190,15 @@ func (i item) Title() string       { return i.title }
 func (i item) Description() string { return i.desc }
 func (i item) FilterValue() string { return i.title }
 
+func (m *AppModel) logf(format string, a ...any) {
+	m.log = append(m.log, fmt.Sprintf(format, a...))
+}
+
 func (m AppModel) Init() tea.Cmd {
 	return nil
 }
 
-func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case toolResult:
 		if msg.err != nil {
@@ -201,14 +206,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if verbose {
-			log.Println("State change: argumentInputView -> resultView")
+			m.logf("Tool result received")
 		}
-		m.state = resultView
-		m.result = msg.result
+		m.logf("Result:\n%s", msg.result)
 		return m, nil
 	case tea.KeyMsg:
 		if verbose {
-			log.Printf("Key pressed: %s", msg.String())
+			m.logf("Key pressed: %s", msg.String())
 		}
 		switch msg.Type {
 		case tea.KeyEsc:
@@ -223,19 +227,18 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateToolSelectionView(msg)
 		case argumentInputView:
 			return m.updateArgumentInputView(msg)
-		case resultView:
-			return m.updateResultView(msg)
 		}
 
 	case tea.WindowSizeMsg:
-		h, v := lipgloss.NewStyle().Margin(1, 2).GetFrameSize()
-		m.toolList.SetSize(msg.Width-h, msg.Height-v)
+		m.width = msg.Width
+		m.height = msg.Height
+		// Just save the dimensions, the actual sizing of components will be done in the View() function.
 	}
 
 	return m, nil
 }
 
-func (m AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.toolList, cmd = m.toolList.Update(msg)
 
@@ -246,7 +249,7 @@ func (m AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.selectedTool.InputSchema != nil && len(m.selectedTool.InputSchema.Properties) > 0 {
 				if verbose {
-					log.Println("State change: toolSelectionView -> argumentInputView")
+					m.logf("State change: toolSelectionView -> argumentInputView")
 				}
 				m.state = argumentInputView
 				m.argInputs = []textinput.Model{}
@@ -268,7 +271,7 @@ func (m AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.argInputs[0].Focus()
 			} else {
 				if verbose {
-					log.Println("No arguments needed, calling tool directly")
+					m.logf("No arguments needed, calling tool directly")
 				}
 				return m.callTool()
 			}
@@ -278,7 +281,7 @@ func (m AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m AppModel) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *AppModel) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -287,7 +290,7 @@ func (m AppModel) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg.Type == tea.KeyEnter {
 		if m.argFocus == len(m.argInputs)-1 {
 			if verbose {
-				log.Println("Last argument input, calling tool")
+				m.logf("Last argument input, calling tool")
 			}
 			return m.callTool()
 		}
@@ -319,26 +322,19 @@ func (m AppModel) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m AppModel) updateResultView(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		if keyMsg.Type == tea.KeyEnter {
-			if verbose {
-				log.Println("State change: resultView -> toolSelectionView")
-			}
-			m.state = toolSelectionView
-		}
-	}
-	return m, nil
-}
-
 func (m AppModel) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error: %v\n\nPress ctrl+c to quit.", m.err)
 	}
 
+	debugWidth := m.width / 3
+	mainWidth := m.width - debugWidth
+
+	var mainContent strings.Builder
 	switch m.state {
 	case toolSelectionView:
-		return m.toolList.View()
+		m.toolList.SetSize(mainWidth-2, m.height-2)
+		mainContent.WriteString(m.toolList.View())
 	case argumentInputView:
 		var b strings.Builder
 		b.WriteString(fmt.Sprintf("Enter arguments for %s:\n\n", m.selectedTool.Name))
@@ -349,12 +345,24 @@ func (m AppModel) View() string {
 			b.WriteString("\n\n")
 		}
 		b.WriteString("\nPress Enter to submit, Tab to switch fields, Esc to go back to tool selection.")
-		return b.String()
-	case resultView:
-		return fmt.Sprintf("Tool Result:\n\n%s\n\nPress Enter to return to tool selection.", m.result)
+		mainContent.WriteString(b.String())
 	}
 
-	return ""
+	debugContent := strings.Join(m.log, "\n")
+
+	mainPanel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Width(mainWidth).
+		Height(m.height - 2).
+		Render(mainContent.String())
+
+	debugPanel := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Width(debugWidth).
+		Height(m.height - 2).
+		Render(debugContent)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, debugPanel)
 }
 
 // toolResult represents the result of a tool call
@@ -364,7 +372,7 @@ type toolResult struct {
 }
 
 // callToolCmd returns a tea.Cmd that calls the tool
-func (m AppModel) callToolCmd() tea.Cmd {
+func (m *AppModel) callToolCmd() tea.Cmd {
 	return func() tea.Msg {
 		args := make(map[string]any)
 		for i, name := range m.argOrder {
@@ -372,7 +380,11 @@ func (m AppModel) callToolCmd() tea.Cmd {
 		}
 
 		if verbose {
-			log.Printf("Calling tool '%s' with args: %v", m.selectedTool.Name, args)
+			prettyArgs, err := json.MarshalIndent(args, "", "  ")
+			if err != nil {
+				m.logf("Error marshalling args: %v", err)
+			}
+			m.logf("Calling tool '%s' with args:\n%s", m.selectedTool.Name, string(prettyArgs))
 		}
 
 		params := &mcp.CallToolParams{
@@ -415,20 +427,11 @@ func (m AppModel) callToolCmd() tea.Cmd {
 	}
 }
 
-func (m AppModel) callTool() (tea.Model, tea.Cmd) {
+func (m *AppModel) callTool() (tea.Model, tea.Cmd) {
 	return m, m.callToolCmd()
 }
 
 func handleSession(ctx context.Context, session *mcp.ClientSession) {
-	if verbose {
-		f, err := tea.LogToFile("debug.log", "debug")
-		if err != nil {
-			fmt.Println("fatal:", err)
-			os.Exit(1)
-		}
-		defer f.Close()
-	}
-
 	p := tea.NewProgram(initialModel(ctx, session), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Error running program: %v", err)
