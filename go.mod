@@ -1,4 +1,4 @@
-module mcp-cli
+module github.com/OpenSystemsLab/mcp-cli
 
 go 1.24.3
 
