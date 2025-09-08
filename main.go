@@ -132,7 +132,7 @@ const (
 	resultView
 )
 
-type model struct {
+type AppModel struct {
 	state        viewState
 	ctx          context.Context
 	session      *mcp.ClientSession
@@ -141,13 +141,14 @@ type model struct {
 	argOrder     []string
 	argFocus     int
 	selectedTool *mcp.Tool
+	tools        []*mcp.Tool
 	result       string
 	err          error
 }
 
-func initialModel(ctx context.Context, session *mcp.ClientSession) model {
-	var tools []*mcp.Tool
+func initialModel(ctx context.Context, session *mcp.ClientSession) AppModel {
 	var err error
+	var tools []*mcp.Tool
 
 	// Iterate over the tools using range
 	for tool, iterErr := range session.Tools(ctx, nil) {
@@ -159,7 +160,7 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) model {
 	}
 
 	if err != nil {
-		return model{err: err}
+		return AppModel{err: err}
 	}
 
 	items := []list.Item{}
@@ -170,11 +171,12 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) model {
 	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Select a tool to execute"
 
-	return model{
+	return AppModel{
 		state:    toolSelectionView,
 		ctx:      ctx,
 		session:  session,
 		toolList: l,
+		tools:    tools,
 	}
 }
 
@@ -187,11 +189,11 @@ func (i item) Title() string       { return i.title }
 func (i item) Description() string { return i.desc }
 func (i item) FilterValue() string { return i.title }
 
-func (m model) Init() tea.Cmd {
+func (m AppModel) Init() tea.Cmd {
 	return nil
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case toolResult:
 		if msg.err != nil {
@@ -209,7 +211,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			log.Printf("Key pressed: %s", msg.String())
 		}
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyEsc:
+		case tea.KeyEsc:
+			m.state = toolSelectionView
+			return m, nil
+		case tea.KeyCtrlC:
 			return m, tea.Quit
 		}
 
@@ -230,7 +235,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.toolList, cmd = m.toolList.Update(msg)
 
@@ -273,7 +278,7 @@ func (m model) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m AppModel) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -314,19 +319,19 @@ func (m model) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m model) updateResultView(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m AppModel) updateResultView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		if keyMsg.Type == tea.KeyEnter {
 			if verbose {
 				log.Println("State change: resultView -> toolSelectionView")
 			}
-			return initialModel(m.ctx, m.session), nil
+			m.state = toolSelectionView
 		}
 	}
 	return m, nil
 }
 
-func (m model) View() string {
+func (m AppModel) View() string {
 	if m.err != nil {
 		return fmt.Sprintf("Error: %v\n\nPress ctrl+c to quit.", m.err)
 	}
@@ -343,7 +348,7 @@ func (m model) View() string {
 			b.WriteString(m.argInputs[i].View())
 			b.WriteString("\n\n")
 		}
-		b.WriteString("\nPress Enter to submit, Tab to switch fields, Esc to quit.")
+		b.WriteString("\nPress Enter to submit, Tab to switch fields, Esc to go back to tool selection.")
 		return b.String()
 	case resultView:
 		return fmt.Sprintf("Tool Result:\n\n%s\n\nPress Enter to return to tool selection.", m.result)
@@ -359,7 +364,7 @@ type toolResult struct {
 }
 
 // callToolCmd returns a tea.Cmd that calls the tool
-func (m model) callToolCmd() tea.Cmd {
+func (m AppModel) callToolCmd() tea.Cmd {
 	return func() tea.Msg {
 		args := make(map[string]any)
 		for i, name := range m.argOrder {
@@ -410,7 +415,7 @@ func (m model) callToolCmd() tea.Cmd {
 	}
 }
 
-func (m model) callTool() (tea.Model, tea.Cmd) {
+func (m AppModel) callTool() (tea.Model, tea.Cmd) {
 	return m, m.callToolCmd()
 }
 
