@@ -375,8 +375,8 @@ func (m AppModel) View() string {
 		return fmt.Sprintf("Error: %v\n\nPress ctrl+c to quit.", m.err)
 	}
 
-	debugWidth := m.width / 3
-	mainWidth := m.width - debugWidth
+	mainWidth := m.width / 3
+	//debugWidth := m.width - mainWidth
 
 	var mainContent strings.Builder
 	switch m.state {
@@ -427,13 +427,11 @@ func (m *AppModel) callToolCmd() tea.Cmd {
 			args[name] = m.argInputs[i].Value()
 		}
 
-		if verbose {
-			prettyArgs, err := json.MarshalIndent(args, "", "  ")
-			if err != nil {
-				m.logf("Error marshalling args: %v", err)
-			}
-			m.logf("Calling tool '%s' with args:\n%s", m.selectedTool.Name, string(prettyArgs))
+		prettyArgs, err := json.MarshalIndent(args, "", "  ")
+		if err != nil {
+			m.logf("Error marshalling args: %v", err)
 		}
+		m.logf("Calling tool '%s' with args:\n%s", m.selectedTool.Name, string(prettyArgs))
 
 		params := &mcp.CallToolParams{
 			Name:      m.selectedTool.Name,
