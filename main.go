@@ -131,7 +131,6 @@ type viewState int
 const (
 	toolSelectionView viewState = iota
 	argumentInputView
-	resultView
 )
 
 type AppModel struct {
@@ -222,9 +221,8 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if verbose {
 			m.logf("Tool result received")
 		}
-		m.logf("Result:\n%s", msg.result)
+		m.logf("Result:\n========\n%s", msg.result)
 		m.result = msg.result
-		m.state = resultView
 	case tea.KeyMsg:
 		if verbose {
 			m.logf("Key pressed: %s", msg.String())
@@ -248,13 +246,6 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case argumentInputView:
 			var model tea.Model
 			model, cmd = m.updateArgumentInputView(msg)
-			cmds = append(cmds, cmd)
-			m.debugViewport, cmd = m.debugViewport.Update(msg)
-			cmds = append(cmds, cmd)
-			return model, tea.Batch(cmds...)
-		case resultView:
-			var model tea.Model
-			model, cmd = m.updateResultView(msg)
 			cmds = append(cmds, cmd)
 			m.debugViewport, cmd = m.debugViewport.Update(msg)
 			cmds = append(cmds, cmd)
@@ -316,18 +307,6 @@ func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, cmd
-}
-
-func (m *AppModel) updateResultView(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		if keyMsg.Type == tea.KeyEnter {
-			if verbose {
-				m.logf("State change: resultView -> argumentInputView")
-			}
-			m.state = argumentInputView
-		}
-	}
-	return m, nil
 }
 
 func (m *AppModel) updateArgumentInputView(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -395,8 +374,6 @@ func (m AppModel) View() string {
 		}
 		b.WriteString("\nPress Enter to submit, Tab to switch fields, Esc to go back to tool selection.")
 		mainContent.WriteString(b.String())
-	case resultView:
-		mainContent.WriteString(fmt.Sprintf("Tool Result:\n\n%s\n\nPress Enter to return to the argument input.", m.result))
 	}
 
 	mainPanel := lipgloss.NewStyle().
@@ -431,6 +408,10 @@ func (m *AppModel) callToolCmd() tea.Cmd {
 			if prop, ok := m.selectedTool.InputSchema.Properties[name]; ok {
 				switch prop.Type {
 				case "number":
+					if valueStr == "" {
+						finalValue = 0
+						continue
+					}
 					f, err := strconv.ParseFloat(valueStr, 64)
 					if err == nil {
 						finalValue = f
@@ -438,6 +419,10 @@ func (m *AppModel) callToolCmd() tea.Cmd {
 						m.logf("Error converting arg '%s' to number: %v", name, err)
 					}
 				case "integer":
+					if valueStr == "" {
+						finalValue = 0
+						continue
+					}
 					i, err := strconv.Atoi(valueStr)
 					if err == nil {
 						finalValue = i
@@ -445,6 +430,10 @@ func (m *AppModel) callToolCmd() tea.Cmd {
 						m.logf("Error converting arg '%s' to integer: %v", name, err)
 					}
 				case "boolean":
+					if valueStr == "" {
+						finalValue = false
+						continue
+					}
 					b, err := strconv.ParseBool(valueStr)
 					if err == nil {
 						finalValue = b
@@ -460,7 +449,7 @@ func (m *AppModel) callToolCmd() tea.Cmd {
 		if err != nil {
 			m.logf("Error marshalling args: %v", err)
 		}
-		m.logf("Calling tool '%s' with args:\n%s", m.selectedTool.Name, string(prettyArgs))
+		m.logf("========\nCalling tool '%s' with args:\n%s", m.selectedTool.Name, string(prettyArgs))
 
 		params := &mcp.CallToolParams{
 			Name:      m.selectedTool.Name,
