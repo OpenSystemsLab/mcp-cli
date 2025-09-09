@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -424,7 +425,35 @@ func (m *AppModel) callToolCmd() tea.Cmd {
 	return func() tea.Msg {
 		args := make(map[string]any)
 		for i, name := range m.argOrder {
-			args[name] = m.argInputs[i].Value()
+			valueStr := m.argInputs[i].Value()
+			var finalValue any = valueStr // Default to string
+
+			if prop, ok := m.selectedTool.InputSchema.Properties[name]; ok {
+				switch prop.Type {
+				case "number":
+					f, err := strconv.ParseFloat(valueStr, 64)
+					if err == nil {
+						finalValue = f
+					} else {
+						m.logf("Error converting arg '%s' to number: %v", name, err)
+					}
+				case "integer":
+					i, err := strconv.Atoi(valueStr)
+					if err == nil {
+						finalValue = i
+					} else {
+						m.logf("Error converting arg '%s' to integer: %v", name, err)
+					}
+				case "boolean":
+					b, err := strconv.ParseBool(valueStr)
+					if err == nil {
+						finalValue = b
+					} else {
+						m.logf("Error converting arg '%s' to boolean: %v", name, err)
+					}
+				}
+			}
+			args[name] = finalValue
 		}
 
 		prettyArgs, err := json.MarshalIndent(args, "", "  ")
