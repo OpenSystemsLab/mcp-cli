@@ -47,13 +47,15 @@ The `mcp-cli` tool has three main commands, one for each transport protocol.
 Connect to an MCP server that communicates over standard input/output.
 
 ```sh
-mcp-cli stdio "<command-to-start-server>"
+mcp-cli stdio --env "VAR=value" --env "ANOTHER_VAR=another_value" "<command-to-start-server>"
 ```
+
+The `--env` (or `-e`) flag can be used multiple times to pass environment variables to the server process.
 
 **Example:**
 
 ```sh
-mcp-cli stdio "python /path/to/mcp/server.py"
+mcp-cli stdio -e "API_KEY=12345" "python /path/to/mcp/server.py"
 ```
 
 ### `sse`

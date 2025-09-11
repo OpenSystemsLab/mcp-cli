@@ -37,6 +37,7 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	stdioCmd.Flags().StringSliceP("env", "e", []string{}, "Environment variables to pass to the command")
 }
 
 var stdioCmd = &cobra.Command{
@@ -49,11 +50,15 @@ var stdioCmd = &cobra.Command{
 			log.Printf("Command: %s", command)
 		}
 
+		env, _ := cmd.Flags().GetStringSlice("env")
+
 		ctx := context.Background()
 		client := mcp.NewClient(&mcp.Implementation{Name: "mcp-cli", Version: "v0.1.0"}, nil)
 
 		cmdParts := strings.Fields(command)
-		transport := &mcp.CommandTransport{Command: exec.Command(cmdParts[0], cmdParts[1:]...)}
+		execCmd := exec.Command(cmdParts[0], cmdParts[1:]...)
+		execCmd.Env = append(os.Environ(), env...)
+		transport := &mcp.CommandTransport{Command: execCmd}
 		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			log.Fatalf("Failed to connect to stdio server: %v", err)
