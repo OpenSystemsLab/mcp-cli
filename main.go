@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"sort"
@@ -37,6 +38,9 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
+	stdioCmd.Flags().StringSliceP("env", "e", []string{}, "Environment variables to pass to the command")
+	sseCmd.Flags().StringSliceP("header", "H", []string{}, "Headers to pass to the server")
+	httpCmd.Flags().StringSliceP("header", "H", []string{}, "Headers to pass to the server")
 }
 
 var stdioCmd = &cobra.Command{
@@ -49,11 +53,15 @@ var stdioCmd = &cobra.Command{
 			log.Printf("Command: %s", command)
 		}
 
+		env, _ := cmd.Flags().GetStringSlice("env")
+
 		ctx := context.Background()
 		client := mcp.NewClient(&mcp.Implementation{Name: "mcp-cli", Version: "v0.1.0"}, nil)
 
 		cmdParts := strings.Fields(command)
-		transport := &mcp.CommandTransport{Command: exec.Command(cmdParts[0], cmdParts[1:]...)}
+		execCmd := exec.Command(cmdParts[0], cmdParts[1:]...)
+		execCmd.Env = append(os.Environ(), env...)
+		transport := &mcp.CommandTransport{Command: execCmd}
 		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			log.Fatalf("Failed to connect to stdio server: %v", err)
@@ -78,10 +86,22 @@ var sseCmd = &cobra.Command{
 			log.Printf("URL: %s", url)
 		}
 
+		headerStrings, _ := cmd.Flags().GetStringSlice("header")
+		var httpClient *http.Client
+		if len(headerStrings) > 0 {
+			headers := parseHeaders(headerStrings)
+			httpClient = &http.Client{
+				Transport: &headerTransport{
+					base:    http.DefaultTransport,
+					headers: headers,
+				},
+			}
+		}
+
 		ctx := context.Background()
 		client := mcp.NewClient(&mcp.Implementation{Name: "mcp-cli", Version: "v0.1.0"}, nil)
 
-		transport := &mcp.SSEClientTransport{Endpoint: url}
+		transport := &mcp.SSEClientTransport{Endpoint: url, HTTPClient: httpClient}
 		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			log.Fatalf("Failed to connect to SSE server: %v", err)
@@ -106,10 +126,22 @@ var httpCmd = &cobra.Command{
 			log.Printf("URL: %s", url)
 		}
 
+		headerStrings, _ := cmd.Flags().GetStringSlice("header")
+		var httpClient *http.Client
+		if len(headerStrings) > 0 {
+			headers := parseHeaders(headerStrings)
+			httpClient = &http.Client{
+				Transport: &headerTransport{
+					base:    http.DefaultTransport,
+					headers: headers,
+				},
+			}
+		}
+
 		ctx := context.Background()
 		client := mcp.NewClient(&mcp.Implementation{Name: "mcp-cli", Version: "v0.1.0"}, nil)
 
-		transport := &mcp.StreamableClientTransport{Endpoint: url}
+		transport := &mcp.StreamableClientTransport{Endpoint: url, HTTPClient: httpClient}
 		session, err := client.Connect(ctx, transport, nil)
 		if err != nil {
 			log.Fatalf("Failed to connect to streamable HTTP server: %v", err)
@@ -122,6 +154,33 @@ var httpCmd = &cobra.Command{
 
 		handleSession(ctx, session)
 	},
+}
+
+// headerTransport is an http.RoundTripper that adds custom headers to each request.
+type headerTransport struct {
+	base    http.RoundTripper
+	headers http.Header
+}
+
+// RoundTrip adds the custom headers to the request before sending it.
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for k, v := range t.headers {
+		req.Header[k] = v
+	}
+	return t.base.RoundTrip(req)
+}
+
+func parseHeaders(headerStrings []string) http.Header {
+	headers := http.Header{}
+	for _, h := range headerStrings {
+		parts := strings.SplitN(h, ":", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			headers.Add(key, value)
+		}
+	}
+	return headers
 }
 
 // -- Bubble Tea TUI -----------------------------------------------------------
