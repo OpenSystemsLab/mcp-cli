@@ -63,13 +63,15 @@ mcp-cli stdio -e "API_KEY=12345" "python /path/to/mcp/server.py"
 Connect to an MCP server that uses Server-Sent Events (SSE).
 
 ```sh
-mcp-cli sse <server-url>
+mcp-cli sse --header "Header-Name: header-value" <server-url>
 ```
+
+The `--header` (or `-H`) flag can be used multiple times to pass custom HTTP headers to the server.
 
 **Example:**
 
 ```sh
-mcp-cli sse http://localhost:8080/mcp
+mcp-cli sse -H "Authorization: Bearer my-token" http://localhost:8080/mcp
 ```
 
 ### `http`
@@ -77,13 +79,15 @@ mcp-cli sse http://localhost:8080/mcp
 Connect to an MCP server that uses streamable HTTP.
 
 ```sh
-mcp-cli http <server-url>
+mcp-cli http --header "Header-Name: header-value" <server-url>
 ```
+
+The `--header` (or `-H`) flag can be used multiple times to pass custom HTTP headers to the server.
 
 **Example:**
 
 ```sh
-mcp-cli http http://localhost:8080/mcp
+mcp-cli http -H "Authorization: Bearer my-token" http://localhost:8080/mcp
 ```
 
 ### Global Flags
