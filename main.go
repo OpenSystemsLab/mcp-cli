@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -258,9 +259,19 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 
 	toolList := list.New(toolItems, list.NewDefaultDelegate(), 0, 0)
 	toolList.Title = "Select a tool to execute"
+	toolList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resources")),
+		}
+	}
 
 	resourceList := list.New(resourceItems, list.NewDefaultDelegate(), 0, 0)
 	resourceList.Title = "Select a resource"
+	resourceList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tools")),
+		}
+	}
 
 	vp := viewport.New(1, 1) // Initial size, will be updated on WindowSizeMsg
 	vp.SetContent("Debug log will appear here...")
