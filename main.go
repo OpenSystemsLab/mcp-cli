@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -190,29 +191,39 @@ type viewState int
 const (
 	toolSelectionView viewState = iota
 	argumentInputView
+	resourceListView
+	resourceDetailView
+	promptListView
 )
 
 type AppModel struct {
-	state         viewState
-	ctx           context.Context
-	session       *mcp.ClientSession
-	toolList      list.Model
-	argInputs     []textinput.Model
-	argOrder      []string
-	argFocus      int
-	selectedTool  *mcp.Tool
-	tools         []*mcp.Tool
-	result        string
-	err           error
-	log           []string
-	width         int
-	height        int
-	debugViewport viewport.Model
+	state            viewState
+	ctx              context.Context
+	session          *mcp.ClientSession
+	toolList         list.Model
+	resourceList     list.Model
+	promptList       list.Model
+	argInputs        []textinput.Model
+	argOrder         []string
+	argFocus         int
+	selectedTool     *mcp.Tool
+	tools            []*mcp.Tool
+	resources        []*mcp.Resource
+	prompts          []*mcp.Prompt
+	selectedResource *mcp.Resource
+	result           string
+	resourceResult   string
+	err              error
+	log              []string
+	width            int
+	height           int
+	debugViewport    viewport.Model
 }
 
 func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 	var err error
 	var tools []*mcp.Tool
+	var resources []*mcp.Resource
 
 	// Iterate over the tools using range
 	for tool, iterErr := range session.Tools(ctx, nil) {
@@ -227,13 +238,72 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 		return &AppModel{err: err}
 	}
 
-	items := []list.Item{}
-	for _, tool := range tools {
-		items = append(items, item{title: tool.Name, desc: tool.Description, tool: tool})
+	var prompts []*mcp.Prompt
+	for prompt, iterErr := range session.Prompts(ctx, nil) {
+		if iterErr != nil {
+			err = iterErr
+			break
+		}
+		prompts = append(prompts, prompt)
 	}
 
-	l := list.New(items, list.NewDefaultDelegate(), 0, 0)
-	l.Title = "Select a tool to execute"
+	if err != nil {
+		return &AppModel{err: err}
+	}
+
+	for resource, iterErr := range session.Resources(ctx, nil) {
+		if iterErr != nil {
+			err = iterErr
+			break
+		}
+		resources = append(resources, resource)
+	}
+
+	if err != nil {
+		return &AppModel{err: err}
+	}
+
+	toolItems := []list.Item{}
+	for _, tool := range tools {
+		toolItems = append(toolItems, item{title: tool.Name, desc: tool.Description, tool: tool})
+	}
+
+	resourceItems := []list.Item{}
+	for _, resource := range resources {
+		resourceItems = append(resourceItems, resourceItem{title: resource.Name, desc: resource.Description, resource: resource})
+	}
+
+	promptItems := []list.Item{}
+	for _, prompt := range prompts {
+		promptItems = append(promptItems, promptItem{title: prompt.Name, desc: prompt.Description, prompt: prompt})
+	}
+
+	toolList := list.New(toolItems, list.NewDefaultDelegate(), 0, 0)
+	toolList.Title = "Select a tool to execute"
+	toolList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resources")),
+			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prompts")),
+		}
+	}
+
+	resourceList := list.New(resourceItems, list.NewDefaultDelegate(), 0, 0)
+	resourceList.Title = "Select a resource"
+	resourceList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tools")),
+			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prompts")),
+		}
+	}
+
+	promptList := list.New(promptItems, list.NewDefaultDelegate(), 0, 0)
+	promptList.Title = "Select a prompt"
+	promptList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tools")),
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resources")),
+		}
+	}
 
 	vp := viewport.New(1, 1) // Initial size, will be updated on WindowSizeMsg
 	vp.SetContent("Debug log will appear here...")
@@ -242,8 +312,12 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 		state:         toolSelectionView,
 		ctx:           ctx,
 		session:       session,
-		toolList:      l,
+		toolList:      toolList,
+		resourceList:  resourceList,
+		promptList:    promptList,
 		tools:         tools,
+		resources:     resources,
+		prompts:       prompts,
 		debugViewport: vp,
 	}
 }
@@ -256,6 +330,24 @@ type item struct {
 func (i item) Title() string       { return i.title }
 func (i item) Description() string { return i.desc }
 func (i item) FilterValue() string { return i.title }
+
+type resourceItem struct {
+	title, desc string
+	resource    *mcp.Resource
+}
+
+func (i resourceItem) Title() string       { return i.title }
+func (i resourceItem) Description() string { return i.desc }
+func (i resourceItem) FilterValue() string { return i.title }
+
+type promptItem struct {
+	title, desc string
+	prompt      *mcp.Prompt
+}
+
+func (i promptItem) Title() string       { return i.title }
+func (i promptItem) Description() string { return i.desc }
+func (i promptItem) FilterValue() string { return i.title }
 
 func (m *AppModel) logf(format string, a ...any) {
 	m.log = append(m.log, fmt.Sprintf(format, a...))
@@ -282,13 +374,27 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.logf("Result:\n========\n%s", msg.result)
 		m.result = msg.result
+	case resourceResult:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		if verbose {
+			m.logf("Resource result received")
+		}
+		m.logf("Result:\n========\n%s", msg.result)
+		m.resourceResult = msg.result
 	case tea.KeyMsg:
 		if verbose {
 			m.logf("Key pressed: %s", msg.String())
 		}
 		switch msg.Type {
 		case tea.KeyEsc:
-			m.state = toolSelectionView
+			if m.state == resourceDetailView {
+				m.state = resourceListView
+			} else {
+				m.state = toolSelectionView
+			}
 			return m, nil
 		case tea.KeyCtrlC:
 			return m, tea.Quit
@@ -302,6 +408,20 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.debugViewport, cmd = m.debugViewport.Update(msg)
 			cmds = append(cmds, cmd)
 			return model, tea.Batch(cmds...)
+		case resourceListView:
+			var model tea.Model
+			model, cmd = m.updateResourceListView(msg)
+			cmds = append(cmds, cmd)
+			m.debugViewport, cmd = m.debugViewport.Update(msg)
+			cmds = append(cmds, cmd)
+			return model, tea.Batch(cmds...)
+		case promptListView:
+			var model tea.Model
+			model, cmd = m.updatePromptListView(msg)
+			cmds = append(cmds, cmd)
+			m.debugViewport, cmd = m.debugViewport.Update(msg)
+			cmds = append(cmds, cmd)
+			return model, tea.Batch(cmds...)
 		case argumentInputView:
 			var model tea.Model
 			model, cmd = m.updateArgumentInputView(msg)
@@ -309,6 +429,10 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.debugViewport, cmd = m.debugViewport.Update(msg)
 			cmds = append(cmds, cmd)
 			return model, tea.Batch(cmds...)
+		case resourceDetailView:
+			m.debugViewport, cmd = m.debugViewport.Update(msg)
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
 		}
 
 	case tea.WindowSizeMsg:
@@ -330,7 +454,14 @@ func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.toolList, cmd = m.toolList.Update(msg)
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		if keyMsg.Type == tea.KeyEnter {
+		switch keyMsg.String() {
+		case "r":
+			m.state = resourceListView
+			return m, nil
+		case "p":
+			m.state = promptListView
+			return m, nil
+		case "enter":
 			selectedItem := m.toolList.SelectedItem().(item)
 			m.selectedTool = selectedItem.tool
 
@@ -362,6 +493,47 @@ func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m.callTool()
 			}
+		}
+	}
+
+	return m, cmd
+}
+
+func (m *AppModel) updatePromptListView(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.promptList, cmd = m.promptList.Update(msg)
+
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "t":
+			m.state = toolSelectionView
+			return m, nil
+		case "r":
+			m.state = resourceListView
+			return m, nil
+		}
+	}
+
+	return m, cmd
+}
+
+func (m *AppModel) updateResourceListView(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.resourceList, cmd = m.resourceList.Update(msg)
+
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "t":
+			m.state = toolSelectionView
+			return m, nil
+		case "p":
+			m.state = promptListView
+			return m, nil
+		case "enter":
+			selectedItem := m.resourceList.SelectedItem().(resourceItem)
+			m.selectedResource = selectedItem.resource
+			m.state = resourceDetailView
+			return m, m.readResourceCmd()
 		}
 	}
 
@@ -422,6 +594,18 @@ func (m AppModel) View() string {
 	case toolSelectionView:
 		m.toolList.SetSize(mainWidth-2, m.height-2)
 		mainContent.WriteString(m.toolList.View())
+	case resourceListView:
+		m.resourceList.SetSize(mainWidth-2, m.height-2)
+		mainContent.WriteString(m.resourceList.View())
+	case promptListView:
+		m.promptList.SetSize(mainWidth-2, m.height-2)
+		mainContent.WriteString(m.promptList.View())
+	case resourceDetailView:
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("Details for %s:\n\n", m.selectedResource.Name))
+		b.WriteString(m.resourceResult)
+		b.WriteString("\n\nPress Esc to go back to resource list.")
+		mainContent.WriteString(b.String())
 	case argumentInputView:
 		var b strings.Builder
 		b.WriteString(fmt.Sprintf("Enter arguments for %s:\n\n", m.selectedTool.Name))
@@ -452,6 +636,12 @@ func (m AppModel) View() string {
 
 // toolResult represents the result of a tool call
 type toolResult struct {
+	result string
+	err    error
+}
+
+// resourceResult represents the result of a resource read
+type resourceResult struct {
 	result string
 	err    error
 }
@@ -552,6 +742,30 @@ func (m *AppModel) callToolCmd() tea.Cmd {
 
 func (m *AppModel) callTool() (tea.Model, tea.Cmd) {
 	return m, m.callToolCmd()
+}
+
+func (m *AppModel) readResourceCmd() tea.Cmd {
+	return func() tea.Msg {
+		params := &mcp.ReadResourceParams{
+			URI: m.selectedResource.URI,
+		}
+		result, err := m.session.ReadResource(m.ctx, params)
+		if err != nil {
+			return resourceResult{err: err}
+		}
+
+		var resultStr strings.Builder
+		for _, content := range result.Contents {
+			prettyJSON, err := json.MarshalIndent(content, "", "  ")
+			if err != nil {
+				resultStr.WriteString(fmt.Sprintf("Error marshalling content: %v\n", err))
+			} else {
+				resultStr.WriteString(string(prettyJSON))
+			}
+		}
+
+		return resourceResult{result: resultStr.String()}
+	}
 }
 
 func handleSession(ctx context.Context, session *mcp.ClientSession) {
