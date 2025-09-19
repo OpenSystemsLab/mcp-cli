@@ -193,28 +193,31 @@ const (
 	argumentInputView
 	resourceListView
 	resourceDetailView
+	promptListView
 )
 
 type AppModel struct {
-	state          viewState
-	ctx            context.Context
-	session        *mcp.ClientSession
-	toolList       list.Model
-	resourceList   list.Model
-	argInputs      []textinput.Model
-	argOrder       []string
-	argFocus       int
-	selectedTool   *mcp.Tool
+	state            viewState
+	ctx              context.Context
+	session          *mcp.ClientSession
+	toolList         list.Model
+	resourceList     list.Model
+	promptList       list.Model
+	argInputs        []textinput.Model
+	argOrder         []string
+	argFocus         int
+	selectedTool     *mcp.Tool
 	tools            []*mcp.Tool
 	resources        []*mcp.Resource
+	prompts          []*mcp.Prompt
 	selectedResource *mcp.Resource
 	result           string
 	resourceResult   string
 	err              error
-	log            []string
-	width          int
-	height         int
-	debugViewport  viewport.Model
+	log              []string
+	width            int
+	height           int
+	debugViewport    viewport.Model
 }
 
 func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
@@ -229,6 +232,19 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 			break
 		}
 		tools = append(tools, tool)
+	}
+
+	if err != nil {
+		return &AppModel{err: err}
+	}
+
+	var prompts []*mcp.Prompt
+	for prompt, iterErr := range session.Prompts(ctx, nil) {
+		if iterErr != nil {
+			err = iterErr
+			break
+		}
+		prompts = append(prompts, prompt)
 	}
 
 	if err != nil {
@@ -257,11 +273,17 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 		resourceItems = append(resourceItems, resourceItem{title: resource.Name, desc: resource.Description, resource: resource})
 	}
 
+	promptItems := []list.Item{}
+	for _, prompt := range prompts {
+		promptItems = append(promptItems, promptItem{title: prompt.Name, desc: prompt.Description, prompt: prompt})
+	}
+
 	toolList := list.New(toolItems, list.NewDefaultDelegate(), 0, 0)
 	toolList.Title = "Select a tool to execute"
 	toolList.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resources")),
+			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prompts")),
 		}
 	}
 
@@ -270,6 +292,16 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 	resourceList.AdditionalShortHelpKeys = func() []key.Binding {
 		return []key.Binding{
 			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tools")),
+			key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "prompts")),
+		}
+	}
+
+	promptList := list.New(promptItems, list.NewDefaultDelegate(), 0, 0)
+	promptList.Title = "Select a prompt"
+	promptList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "tools")),
+			key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "resources")),
 		}
 	}
 
@@ -282,8 +314,10 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 		session:       session,
 		toolList:      toolList,
 		resourceList:  resourceList,
+		promptList:    promptList,
 		tools:         tools,
 		resources:     resources,
+		prompts:       prompts,
 		debugViewport: vp,
 	}
 }
@@ -305,6 +339,15 @@ type resourceItem struct {
 func (i resourceItem) Title() string       { return i.title }
 func (i resourceItem) Description() string { return i.desc }
 func (i resourceItem) FilterValue() string { return i.title }
+
+type promptItem struct {
+	title, desc string
+	prompt      *mcp.Prompt
+}
+
+func (i promptItem) Title() string       { return i.title }
+func (i promptItem) Description() string { return i.desc }
+func (i promptItem) FilterValue() string { return i.title }
 
 func (m *AppModel) logf(format string, a ...any) {
 	m.log = append(m.log, fmt.Sprintf(format, a...))
@@ -372,6 +415,13 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.debugViewport, cmd = m.debugViewport.Update(msg)
 			cmds = append(cmds, cmd)
 			return model, tea.Batch(cmds...)
+		case promptListView:
+			var model tea.Model
+			model, cmd = m.updatePromptListView(msg)
+			cmds = append(cmds, cmd)
+			m.debugViewport, cmd = m.debugViewport.Update(msg)
+			cmds = append(cmds, cmd)
+			return model, tea.Batch(cmds...)
 		case argumentInputView:
 			var model tea.Model
 			model, cmd = m.updateArgumentInputView(msg)
@@ -407,6 +457,9 @@ func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch keyMsg.String() {
 		case "r":
 			m.state = resourceListView
+			return m, nil
+		case "p":
+			m.state = promptListView
 			return m, nil
 		case "enter":
 			selectedItem := m.toolList.SelectedItem().(item)
@@ -446,6 +499,24 @@ func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *AppModel) updatePromptListView(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.promptList, cmd = m.promptList.Update(msg)
+
+	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		switch keyMsg.String() {
+		case "t":
+			m.state = toolSelectionView
+			return m, nil
+		case "r":
+			m.state = resourceListView
+			return m, nil
+		}
+	}
+
+	return m, cmd
+}
+
 func (m *AppModel) updateResourceListView(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.resourceList, cmd = m.resourceList.Update(msg)
@@ -454,6 +525,9 @@ func (m *AppModel) updateResourceListView(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch keyMsg.String() {
 		case "t":
 			m.state = toolSelectionView
+			return m, nil
+		case "p":
+			m.state = promptListView
 			return m, nil
 		case "enter":
 			selectedItem := m.resourceList.SelectedItem().(resourceItem)
@@ -523,6 +597,9 @@ func (m AppModel) View() string {
 	case resourceListView:
 		m.resourceList.SetSize(mainWidth-2, m.height-2)
 		mainContent.WriteString(m.resourceList.View())
+	case promptListView:
+		m.promptList.SetSize(mainWidth-2, m.height-2)
+		mainContent.WriteString(m.promptList.View())
 	case resourceDetailView:
 		var b strings.Builder
 		b.WriteString(fmt.Sprintf("Details for %s:\n\n", m.selectedResource.Name))

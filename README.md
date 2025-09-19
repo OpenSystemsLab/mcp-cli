@@ -11,6 +11,7 @@ MCP-CLI is a command-line tool for interacting with and testing Model Context Pr
   - Enter arguments for the selected tool in a form.
   - View the results of the tool execution.
 - **Resource Browser:** A new tab in the TUI for listing and querying MCP resources.
+- **Prompt Browser:** A new tab in the TUI for listing MCP prompts.
 - **Debug Panel:** A scrollable debug panel on the right side of the TUI that shows:
   - Informational logs (key presses, state changes).
   - The arguments sent to the tool in a pretty-printed JSON format.
@@ -100,13 +101,15 @@ mcp-cli http -H "Authorization: Bearer my-token" http://localhost:8080/mcp
 
 When you connect to an MCP server, you will be presented with a terminal user interface.
 
--   **Tool Selection View:** A list of available tools. Use the arrow keys to navigate and press `Enter` to select a tool. Press `r` to switch to the resource browser.
--   **Resource Browser View:** A list of available resources. Use the arrow keys to navigate and press `Enter` to view the resource details. Press `t` to switch back to the tool selection view.
+-   **Tool Selection View:** A list of available tools. Use the arrow keys to navigate and press `Enter` to select a tool. Press `r` to switch to the resource browser or `p` to switch to the prompt browser.
+-   **Resource Browser View:** A list of available resources. Use the arrow keys to navigate and press `Enter` to view the resource details. Press `t` to switch back to the tool selection view or `p` to switch to the prompt browser.
+-   **Prompt Browser View:** A list of available prompts. Use the arrow keys to navigate. Press `t` to switch back to the tool selection view or `r` to switch to the resource browser.
 -   **Argument Input View:** A form for entering the arguments for the selected tool. Use `Tab` to switch between fields and `Enter` to submit the tool call.
 -   **Resource Detail View:** Shows the content of the selected resource. Press `Esc` to return to the resource list.
 -   **Debug Panel:** The right-hand panel shows a scrollable log of events, tool calls, and results. Use the up and down arrow keys to scroll through the log.
 -   **Navigation:**
 -    -   `t`: Switch to the tool selection view.
 -    -   `r`: Switch to the resource browser view.
+-    -   `p`: Switch to the prompt browser view.
 -    -   `Esc`: Return to the previous view.
     -   `Ctrl+C`: Exit the application.
