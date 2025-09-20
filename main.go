@@ -401,7 +401,6 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if verbose {
 			m.logf("Resource result received")
 		}
-		m.logf("Result:\n========\n%s", msg.result)
 		m.resourceResult = msg.result
 		return m, nil
 
@@ -788,7 +787,7 @@ func handleSession(ctx context.Context, session *mcp.ClientSession) {
 		}
 		defer f.Close()
 	}
-	p := tea.NewProgram(initialModel(ctx, session), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(ctx, session), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		log.Fatalf("Error running program: %v", err)
 	}
