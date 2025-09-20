@@ -196,8 +196,16 @@ const (
 	promptListView
 )
 
+type focusedPanel int
+
+const (
+	mainPanelFocus focusedPanel = iota
+	debugPanelFocus
+)
+
 type AppModel struct {
 	state            viewState
+	focusedPanel     focusedPanel
 	ctx              context.Context
 	session          *mcp.ClientSession
 	toolList         list.Model
@@ -310,6 +318,7 @@ func initialModel(ctx context.Context, session *mcp.ClientSession) *AppModel {
 
 	return &AppModel{
 		state:         toolSelectionView,
+		focusedPanel:  mainPanelFocus,
 		ctx:           ctx,
 		session:       session,
 		toolList:      toolList,
@@ -361,9 +370,17 @@ func (m AppModel) Init() tea.Cmd {
 
 func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		debugPanelWidth := m.width / 3
+		m.debugViewport.Width = debugPanelWidth - 2
+		m.debugViewport.Height = m.height - 2
+		m.debugViewport, cmd = m.debugViewport.Update(msg)
+		return m, cmd
+
 	case toolResult:
 		if msg.err != nil {
 			m.err = msg.err
@@ -374,6 +391,8 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.logf("Result:\n========\n%s", msg.result)
 		m.result = msg.result
+		return m, nil
+
 	case resourceResult:
 		if msg.err != nil {
 			m.err = msg.err
@@ -384,11 +403,21 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.logf("Result:\n========\n%s", msg.result)
 		m.resourceResult = msg.result
+		return m, nil
+
 	case tea.KeyMsg:
 		if verbose {
 			m.logf("Key pressed: %s", msg.String())
 		}
+		// Global key bindings that work regardless of focus
 		switch msg.Type {
+		case tea.KeyTab:
+			if m.focusedPanel == mainPanelFocus {
+				m.focusedPanel = debugPanelFocus
+			} else {
+				m.focusedPanel = mainPanelFocus
+			}
+			return m, nil
 		case tea.KeyEsc:
 			if m.state == resourceDetailView {
 				m.state = resourceListView
@@ -399,54 +428,29 @@ func (m *AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC:
 			return m, tea.Quit
 		}
-
-		switch m.state {
-		case toolSelectionView:
-			var model tea.Model
-			model, cmd = m.updateToolSelectionView(msg)
-			cmds = append(cmds, cmd)
-			m.debugViewport, cmd = m.debugViewport.Update(msg)
-			cmds = append(cmds, cmd)
-			return model, tea.Batch(cmds...)
-		case resourceListView:
-			var model tea.Model
-			model, cmd = m.updateResourceListView(msg)
-			cmds = append(cmds, cmd)
-			m.debugViewport, cmd = m.debugViewport.Update(msg)
-			cmds = append(cmds, cmd)
-			return model, tea.Batch(cmds...)
-		case promptListView:
-			var model tea.Model
-			model, cmd = m.updatePromptListView(msg)
-			cmds = append(cmds, cmd)
-			m.debugViewport, cmd = m.debugViewport.Update(msg)
-			cmds = append(cmds, cmd)
-			return model, tea.Batch(cmds...)
-		case argumentInputView:
-			var model tea.Model
-			model, cmd = m.updateArgumentInputView(msg)
-			cmds = append(cmds, cmd)
-			m.debugViewport, cmd = m.debugViewport.Update(msg)
-			cmds = append(cmds, cmd)
-			return model, tea.Batch(cmds...)
-		case resourceDetailView:
-			m.debugViewport, cmd = m.debugViewport.Update(msg)
-			cmds = append(cmds, cmd)
-			return m, tea.Batch(cmds...)
-		}
-
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		debugWidth := m.width / 3
-		m.debugViewport.Width = debugWidth
-		m.debugViewport.Height = m.height - 2
 	}
 
-	m.debugViewport, cmd = m.debugViewport.Update(msg)
-	cmds = append(cmds, cmd)
+	// Delegate message to the focused panel
+	if m.focusedPanel == debugPanelFocus {
+		m.debugViewport, cmd = m.debugViewport.Update(msg)
+		return m, cmd
+	}
 
-	return m, tea.Batch(cmds...)
+	// Main panel has focus, delegate to the active view
+	switch m.state {
+	case toolSelectionView:
+		return m.updateToolSelectionView(msg)
+	case resourceListView:
+		return m.updateResourceListView(msg)
+	case promptListView:
+		return m.updatePromptListView(msg)
+	case argumentInputView:
+		return m.updateArgumentInputView(msg)
+	case resourceDetailView:
+		return m, nil
+	}
+
+	return m, nil
 }
 
 func (m *AppModel) updateToolSelectionView(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -586,19 +590,19 @@ func (m AppModel) View() string {
 		return fmt.Sprintf("Error: %v\n\nPress ctrl+c to quit.", m.err)
 	}
 
-	mainWidth := m.width / 3
-	//debugWidth := m.width - mainWidth
+	debugPanelWidth := m.width / 3
+	mainPanelWidth := m.width - debugPanelWidth
 
 	var mainContent strings.Builder
 	switch m.state {
 	case toolSelectionView:
-		m.toolList.SetSize(mainWidth-2, m.height-2)
+		m.toolList.SetSize(mainPanelWidth-2, m.height-2)
 		mainContent.WriteString(m.toolList.View())
 	case resourceListView:
-		m.resourceList.SetSize(mainWidth-2, m.height-2)
+		m.resourceList.SetSize(mainPanelWidth-2, m.height-2)
 		mainContent.WriteString(m.resourceList.View())
 	case promptListView:
-		m.promptList.SetSize(mainWidth-2, m.height-2)
+		m.promptList.SetSize(mainPanelWidth-2, m.height-2)
 		mainContent.WriteString(m.promptList.View())
 	case resourceDetailView:
 		var b strings.Builder
@@ -619,17 +623,24 @@ func (m AppModel) View() string {
 		mainContent.WriteString(b.String())
 	}
 
-	mainPanel := lipgloss.NewStyle().
+	mainPanelStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		Width(mainWidth).
-		Height(m.height - 2).
-		Render(mainContent.String())
+		Width(mainPanelWidth - 2).
+		Height(m.height - 2)
 
-	debugPanel := lipgloss.NewStyle().
+	debugPanelStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		Width(m.debugViewport.Width).
-		Height(m.debugViewport.Height).
-		Render(m.debugViewport.View())
+		Width(debugPanelWidth - 2).
+		Height(m.debugViewport.Height)
+
+	if m.focusedPanel == mainPanelFocus {
+		mainPanelStyle = mainPanelStyle.BorderForeground(lipgloss.Color("228")) // Yellow
+	} else {
+		debugPanelStyle = debugPanelStyle.BorderForeground(lipgloss.Color("228")) // Yellow
+	}
+
+	mainPanel := mainPanelStyle.Render(mainContent.String())
+	debugPanel := debugPanelStyle.Render(m.debugViewport.View())
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, debugPanel)
 }
